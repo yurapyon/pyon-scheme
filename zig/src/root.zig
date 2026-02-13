@@ -45,14 +45,51 @@ pub const Environment = struct {
     }
 };
 
-const Lambda = struct {
+fn assoc(alist: Cons, symbol: []const u8) ?Value {
+    const alist_iter = alist.iterator();
+    while (alist_iter.next()) |p| {
+        const pair = p.car;
+        const key = pair.cons.car.symbol;
+        if (std.mem.eql(u8, key, symbol)) {
+            return pair.cons.cdr;
+        }
+    }
+
+    return null;
+}
+
+pub const Lambda = struct {
     bindings: Value,
     body: Value,
-    environment: Value,
 
-    pub fn apply(self: @This(), args: Value) @This() {
-        _ = self;
-        _ = args;
+    pub fn apply(self: @This(), args: Value, environment: Value) @This() {
+        const initial_env_cons = environment.cons;
+
+        var curr_env = environment.cons;
+        var bindings_iter = self.bindings.iterator();
+        var args_iter = args.cons.iterator();
+        while (bindings_iter.next()) |b| {
+            const arg_value = args_iter.next();
+            if (arg_value) |a| {
+                const pair: Cons = .{
+                    .car = b.car,
+                    .cdr = a.car,
+                };
+                const new_cons = undefined;
+                curr_env.cdr = new_cons;
+                new_cons.* = .{
+                    .car = pair,
+                    .cdr = .nil,
+                };
+                curr_env = new_cons;
+            }
+        }
+
+        const ret = self.body.eval(curr_env);
+
+        initial_env_cons.cdr = .nil;
+
+        return ret;
     }
 };
 
@@ -73,32 +110,25 @@ pub const Value = union(enum) {
                 const func = c.car;
                 const args = c.cdr;
 
-                // TODO verify value types
-                var from_env: ?Value = null;
-                const env_iter = environment.cons.iterator();
-                while (env_iter.next()) |env| {
-                    const pair = env.car;
-                    const key = pair.cons.car.symbol;
-                    if (std.mem.eql(u8, key, func.symbol)) {
-                        from_env = pair.cons.cdr;
-                        break;
-                    }
-                }
+                const from_env = func.eval(environment);
 
-                if (from_env) |f| {
-                    switch (f) {
-                        .builtin => |b| {
-                            b.apply(args);
-                        },
-                        .lambda => |l| {
-                            l.apply(args);
-                        },
-                        else => {
-                            // TODO invalid type error
-                        },
-                    }
+                switch (from_env) {
+                    .builtin => |b| {
+                        return b.apply(args, environment);
+                    },
+                    .lambda => |l| {
+                        return l.apply(args, environment);
+                    },
+                    else => {
+                        // TODO invalid type error
+                    },
+                }
+            },
+            .symbol => |s| {
+                if (assoc(environment.cons, s)) |from_env| {
+                    return from_env;
                 } else {
-                    // TODO error
+                    //TODO error
                 }
             },
             else => return self,

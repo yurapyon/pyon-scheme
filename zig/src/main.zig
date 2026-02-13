@@ -20,10 +20,8 @@ pub fn main() !void {
 
     var t: Tokenizer = .empty;
     t.setInput(
-        \\ (list (0 . 1) (2 . 3))
-        //         \\ (1 2 3 + +) (10 20 +) +
-        \\ (def thingy (_w _x _y) w x y)
-        //         \\ (def thingy _w_x_y w x y)
+        \\ (list (cons 0 1) (cons 2 3))
+        \\ (define thingy (lambda (x y) (* (+ x 2) (+ y 4))))
     );
 
     var p: Parser = undefined;

@@ -1,0 +1,4 @@
+(executable
+ (public_name pyon)
+ (name main)
+ (libraries pyon))
