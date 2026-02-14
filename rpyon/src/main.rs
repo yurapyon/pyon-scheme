@@ -1,0 +1,256 @@
+use std::cell::RefCell;
+use std::fmt;
+use std::rc::Rc;
+
+fn is_whitespace(ch: char) -> bool {
+    ch == ' ' || ch == '\n'
+}
+
+fn is_break(ch: char) -> bool {
+    is_whitespace(ch) || ch == '(' || ch == ')'
+}
+
+struct Tokenizer<'a> {
+    input: &'a str,
+    input_at: usize,
+}
+
+impl<'a> Tokenizer<'a> {
+    fn new(input: &str) -> Tokenizer<'_> {
+        Tokenizer { input, input_at: 0 }
+    }
+
+    fn next_char(self: &mut Tokenizer<'a>) -> Option<char> {
+        if self.input_at >= self.input.len() {
+            None
+        } else {
+            let ch = self.input.chars().nth(self.input_at);
+            self.input_at += 1;
+            ch
+        }
+    }
+
+    fn skip_whitespace(self: &mut Tokenizer<'a>) {
+        let mut ch = self.next_char();
+        while ch != None {
+            if !is_whitespace(ch.unwrap()) {
+                self.input_at -= 1;
+                break;
+            }
+            ch = self.next_char();
+        }
+    }
+
+    fn next_token(self: &mut Tokenizer<'a>) -> Option<&'a str> {
+        self.skip_whitespace();
+
+        let start = self.input_at;
+        let mut is_symbol = false;
+
+        let mut ch = self.next_char();
+        while ch != None {
+            if is_break(ch.unwrap()) {
+                if is_symbol {
+                    self.input_at -= 1;
+                }
+                break;
+            } else {
+                is_symbol = true;
+            }
+            ch = self.next_char();
+        }
+
+        let end = self.input_at;
+
+        if start == end {
+            None
+        } else {
+            self.input.get(start..end)
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct LispPtr<T> {
+    contents: Option<Rc<RefCell<T>>>,
+}
+
+impl<T> LispPtr<T> {
+    fn new(value: T) -> LispPtr<T> {
+        LispPtr {
+            contents: Some(Rc::new(RefCell::new(value))),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct Pair {
+    car: Value,
+    cdr: Value,
+}
+
+#[derive(Debug, Clone)]
+struct Lambda {
+    bindings: Value,
+    body: Value,
+}
+
+#[derive(Debug, Clone)]
+enum Value {
+    Nil,
+    Integer(isize),
+    Symbol(String),
+    Lambda(LispPtr<Lambda>),
+    Pair(LispPtr<Pair>),
+}
+
+impl Value {
+    fn new_pair() -> Value {
+        let pair = Pair {
+            car: Value::Nil,
+            cdr: Value::Nil,
+        };
+
+        let ptr = LispPtr::new(pair);
+
+        Value::Pair(ptr)
+    }
+
+    fn new_symbol(s: &str) -> Value {
+        Value::Symbol(String::from(s))
+    }
+}
+
+impl fmt::Display for Value {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
+        match self {
+            Value::Nil => write!(f, "nil"),
+            Value::Integer(i) => write!(f, "i:{i}"),
+            Value::Symbol(s) => write!(f, "s:{s}"),
+            Value::Lambda(l) => Ok(()),
+            Value::Pair(p) => {
+                let ptr = p.contents.as_ref().unwrap().borrow();
+                write!(f, "({} {})", ptr.car, ptr.cdr)
+            }
+        }
+    }
+}
+
+fn parse(t: &mut Tokenizer<'_>) -> Value {
+    let append_value = |stk: &mut Vec<Value>, v: &Value| {
+        let pair = Value::new_pair();
+
+        {
+            let top = stk.last().unwrap();
+            let Value::Pair(ptr) = top else {
+                panic!();
+            };
+
+            let mut ptr_mut = ptr.contents.as_ref().unwrap().borrow_mut();
+
+            ptr_mut.car = v.clone();
+            ptr_mut.cdr = pair.clone();
+        }
+
+        let at = stk.len() - 1;
+        stk[at] = pair.clone();
+    };
+
+    let root = Value::new_pair();
+
+    let mut ast_stack: Vec<Value> = Vec::new();
+    ast_stack.push(root.clone());
+
+    let mut token = t.next_token();
+    while token != None {
+        match token.unwrap() {
+            "(" => {
+                let new_list = Value::new_pair();
+                append_value(&mut ast_stack, &new_list);
+                ast_stack.push(new_list.clone());
+            }
+            // TODO
+            //  check ast_stack len, shouldnt be < 1
+            ")" => _ = ast_stack.pop(),
+            s => {
+                append_value(&mut ast_stack, &Value::new_symbol(s));
+            }
+        }
+        token = t.next_token();
+    }
+
+    // TODO
+    //  check ast_stack len, should be 1
+    root
+}
+
+/*
+fn parse<'a>(t: &mut Tokenizer<'a>) -> Value<'a> {
+    let mut ast_stack: Vec<Value> = Vec::new();
+    ast_stack.push(Value::new_pair());
+    let mut current = ast_stack.last_mut().unwrap();
+
+    let mut token = t.next_token();
+    while token != None {
+        match token.unwrap() {
+            "(" => {
+                ast_stack.push(Value::new_pair());
+                current = ast_stack.last_mut().unwrap();
+            }
+            ")" => {
+                // TODO
+                // check ast_stack len
+                // shouldnt go below 1
+                let previous = ast_stack.pop().unwrap();
+                current = ast_stack.last_mut().unwrap();
+
+                loop {
+                    let Value::Pair(p) = current else {
+                        panic!();
+                    };
+
+                    if let Value::Nil = p.cdr {
+                        p.car = previous;
+                        p.cdr = Value::new_pair();
+                        current = &mut p.cdr;
+                        break;
+                    } else {
+                        current = &mut p.cdr;
+                    }
+                }
+            }
+            s => {
+                let Value::Pair(p) = current else {
+                    panic!();
+                };
+
+                p.car = Value::new_symbol(s);
+                p.cdr = Value::new_pair();
+                current = &mut p.cdr;
+            }
+        }
+        token = t.next_token();
+    }
+
+    // TODO
+    //  check ast_stack len, should be 1
+    ast_stack.pop().unwrap()
+}
+*/
+
+// main ===
+
+fn main() {
+    let mut t = Tokenizer::new("(+ (* 3) (* 6))");
+    println!("{}", parse(&mut t));
+
+    /*
+    let mut token = t.next_token();
+    while token != None {
+        println!("{:?}", token);
+        token = t.next_token();
+    }
+    */
+
+    // let mut p = Parser::new();
+}
