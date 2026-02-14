@@ -99,7 +99,7 @@ struct Lambda {
 enum Value {
     Nil,
     Integer(isize),
-    Symbol(String),
+    Symbol(Rc<String>),
     Lambda(LispPtr<Lambda>),
     Pair(LispPtr<Pair>),
 }
@@ -116,8 +116,12 @@ impl Value {
         Value::Pair(ptr)
     }
 
-    fn new_symbol(s: &str) -> Value {
-        Value::Symbol(String::from(s))
+    fn new_symbol(s: Rc<String>) -> Value {
+        Value::Symbol(s.clone())
+    }
+
+    fn new_integer(i: isize) -> Value {
+        Value::Integer(i)
     }
 }
 
@@ -136,121 +140,92 @@ impl fmt::Display for Value {
     }
 }
 
-fn parse(t: &mut Tokenizer<'_>) -> Value {
-    let append_value = |stk: &mut Vec<Value>, v: &Value| {
-        let pair = Value::new_pair();
+// ctx ===
 
-        {
-            let top = stk.last().unwrap();
-            let Value::Pair(ptr) = top else {
-                panic!();
-            };
-
-            let mut ptr_mut = ptr.contents.as_ref().unwrap().borrow_mut();
-
-            ptr_mut.car = v.clone();
-            ptr_mut.cdr = pair.clone();
-        }
-
-        let at = stk.len() - 1;
-        stk[at] = pair.clone();
-    };
-
-    let root = Value::new_pair();
-
-    let mut ast_stack: Vec<Value> = Vec::new();
-    ast_stack.push(root.clone());
-
-    let mut token = t.next_token();
-    while token != None {
-        match token.unwrap() {
-            "(" => {
-                let new_list = Value::new_pair();
-                append_value(&mut ast_stack, &new_list);
-                ast_stack.push(new_list.clone());
-            }
-            // TODO
-            //  check ast_stack len, shouldnt be < 1
-            ")" => _ = ast_stack.pop(),
-            s => {
-                append_value(&mut ast_stack, &Value::new_symbol(s));
-            }
-        }
-        token = t.next_token();
-    }
-
-    // TODO
-    //  check ast_stack len, should be 1
-    root
+struct Context {
+    symbol_table: Vec<Rc<String>>,
+    ast: Value,
 }
 
-/*
-fn parse<'a>(t: &mut Tokenizer<'a>) -> Value<'a> {
-    let mut ast_stack: Vec<Value> = Vec::new();
-    ast_stack.push(Value::new_pair());
-    let mut current = ast_stack.last_mut().unwrap();
+impl Context {
+    fn get_symbol(self: &mut Context, name: &str) -> Rc<String> {
+        let maybe_rc = self.symbol_table.iter().find(|s| s.as_str() == name);
 
-    let mut token = t.next_token();
-    while token != None {
-        match token.unwrap() {
-            "(" => {
-                ast_stack.push(Value::new_pair());
-                current = ast_stack.last_mut().unwrap();
+        match maybe_rc {
+            Some(rc) => rc.clone(),
+            None => {
+                let rc = Rc::new(String::from(name));
+                self.symbol_table.push(rc.clone());
+                rc.clone()
             }
-            ")" => {
-                // TODO
-                // check ast_stack len
-                // shouldnt go below 1
-                let previous = ast_stack.pop().unwrap();
-                current = ast_stack.last_mut().unwrap();
+        }
+    }
 
-                loop {
-                    let Value::Pair(p) = current else {
-                        panic!();
-                    };
+    fn parse(self: &mut Context, t: &mut Tokenizer<'_>) {
+        let append_value = |stk: &mut Vec<Value>, v: &Value| {
+            let pair = Value::new_pair();
 
-                    if let Value::Nil = p.cdr {
-                        p.car = previous;
-                        p.cdr = Value::new_pair();
-                        current = &mut p.cdr;
-                        break;
-                    } else {
-                        current = &mut p.cdr;
-                    }
-                }
-            }
-            s => {
-                let Value::Pair(p) = current else {
+            {
+                let top = stk.last().unwrap();
+                let Value::Pair(ptr) = top else {
                     panic!();
                 };
 
-                p.car = Value::new_symbol(s);
-                p.cdr = Value::new_pair();
-                current = &mut p.cdr;
-            }
-        }
-        token = t.next_token();
-    }
+                let mut ptr_mut = ptr.contents.as_ref().unwrap().borrow_mut();
 
-    // TODO
-    //  check ast_stack len, should be 1
-    ast_stack.pop().unwrap()
+                ptr_mut.car = v.clone();
+                ptr_mut.cdr = pair.clone();
+            }
+
+            let at = stk.len() - 1;
+            stk[at] = pair.clone();
+        };
+
+        let root = Value::new_pair();
+
+        let mut ast_stack: Vec<Value> = Vec::new();
+        ast_stack.push(root.clone());
+
+        let mut token = t.next_token();
+        while token != None {
+            match token.unwrap() {
+                "(" => {
+                    let new_list = Value::new_pair();
+                    append_value(&mut ast_stack, &new_list);
+                    ast_stack.push(new_list.clone());
+                }
+                // TODO
+                //  check ast_stack len, shouldnt be < 1
+                ")" => _ = ast_stack.pop(),
+                s => match s.parse::<isize>() {
+                    Ok(i) => {
+                        append_value(&mut ast_stack, &Value::new_integer(i));
+                    }
+                    _ => {
+                        let symbol = self.get_symbol(s);
+                        append_value(&mut ast_stack, &Value::new_symbol(symbol));
+                    }
+                },
+            }
+            token = t.next_token();
+        }
+
+        // TODO
+        //  check ast_stack len, should be 1
+        self.ast = root;
+    }
 }
-*/
 
 // main ===
 
 fn main() {
-    let mut t = Tokenizer::new("(+ (* 3) (* 6))");
-    println!("{}", parse(&mut t));
+    let mut ctx = Context {
+        symbol_table: Vec::new(),
+        ast: Value::Nil,
+    };
 
-    /*
-    let mut token = t.next_token();
-    while token != None {
-        println!("{:?}", token);
-        token = t.next_token();
-    }
-    */
-
-    // let mut p = Parser::new();
+    // let mut t = Tokenizer::new("(+ (* 3) (* 6))");
+    let mut t = Tokenizer::new("(lambda (a b) (+ a b))");
+    ctx.parse(&mut t);
+    println!("{}", ctx.ast);
 }
