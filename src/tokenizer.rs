@@ -27,13 +27,11 @@ impl<'a> Tokenizer<'a> {
     }
 
     fn skip_whitespace(self: &mut Tokenizer<'a>) {
-        let mut ch = self.next_char();
-        while ch != None {
-            if !is_whitespace(ch.unwrap()) {
+        while let Some(ch) = self.next_char() {
+            if !is_whitespace(ch) {
                 self.input_at -= 1;
                 break;
             }
-            ch = self.next_char();
         }
     }
 }
@@ -46,9 +44,8 @@ impl<'a> Iterator for Tokenizer<'a> {
         let start = self.input_at;
         let mut is_symbol = false;
 
-        let mut ch = self.next_char();
-        while ch != None {
-            if is_break(ch.unwrap()) {
+        while let Some(ch) = self.next_char() {
+            if is_break(ch) {
                 if is_symbol {
                     self.input_at -= 1;
                 }
@@ -56,7 +53,6 @@ impl<'a> Iterator for Tokenizer<'a> {
             } else {
                 is_symbol = true;
             }
-            ch = self.next_char();
         }
 
         let end = self.input_at;
