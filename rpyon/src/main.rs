@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Ref, RefCell};
 use std::fmt;
 use std::rc::Rc;
 
@@ -71,19 +71,6 @@ impl<'a> Tokenizer<'a> {
 }
 
 #[derive(Debug, Clone)]
-struct LispPtr<T> {
-    contents: Option<Rc<RefCell<T>>>,
-}
-
-impl<T> LispPtr<T> {
-    fn new(value: T) -> LispPtr<T> {
-        LispPtr {
-            contents: Some(Rc::new(RefCell::new(value))),
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
 struct Pair {
     car: Value,
     cdr: Value,
@@ -95,13 +82,28 @@ struct Lambda {
     body: Value,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+enum BuiltinType {
+    Normal,
+    Macro,
+    SpecialForm,
+}
+
+#[derive(Debug, Clone)]
+struct Builtin {
+    name: Rc<String>,
+    ty: BuiltinType,
+    func: fn(expr: &Value, context: &mut Context) -> Value,
+}
+
 #[derive(Debug, Clone)]
 enum Value {
     Nil,
     Integer(isize),
     Symbol(Rc<String>),
-    Lambda(LispPtr<Lambda>),
-    Pair(LispPtr<Pair>),
+    Builtin(Builtin),
+    Lambda(Rc<RefCell<Lambda>>),
+    Pair(Rc<RefCell<Pair>>),
 }
 
 impl Value {
@@ -111,17 +113,50 @@ impl Value {
             cdr: Value::Nil,
         };
 
-        let ptr = LispPtr::new(pair);
+        let ptr = Rc::new(RefCell::new(pair));
 
         Value::Pair(ptr)
     }
 
     fn new_symbol(s: Rc<String>) -> Value {
-        Value::Symbol(s.clone())
+        Value::Symbol(s)
     }
 
     fn new_integer(i: isize) -> Value {
         Value::Integer(i)
+    }
+
+    fn new_builtin(b: Builtin) -> Value {
+        Value::Builtin(b)
+    }
+}
+
+struct ValueIter {
+    current: Option<Value>,
+}
+
+impl ValueIter {
+    fn from(v: Value) -> Self {
+        Self { current: Some(v) }
+    }
+
+    fn next(&mut self) -> Option<Value> {
+        let mut ret = None;
+        let mut next = None;
+
+        if let Some(Value::Pair(pair)) = &self.current {
+            if let Pair {
+                cdr: cdr @ Value::Pair(_),
+                ..
+            } = &*pair.borrow()
+            {
+                ret = self.current.clone();
+                next = Some(cdr.clone());
+            }
+        };
+
+        self.current = next;
+        ret
     }
 }
 
@@ -131,54 +166,84 @@ impl fmt::Display for Value {
             Value::Nil => write!(f, "nil"),
             Value::Integer(i) => write!(f, "i:{i}"),
             Value::Symbol(s) => write!(f, "s:{s}"),
-            Value::Lambda(l) => Ok(()),
-            Value::Pair(p) => {
-                let ptr = p.contents.as_ref().unwrap().borrow();
-                write!(f, "({} {})", ptr.car, ptr.cdr)
+            Value::Builtin(b) => write!(f, "b:{}", b.name),
+            Value::Lambda(l) => {
+                let l = l.borrow();
+                write!(f, "l:(<{}> {})", l.bindings, l.body)
             }
+            Value::Pair(p) => match &*p.borrow() {
+                Pair {
+                    car: Value::Nil,
+                    cdr: Value::Nil,
+                } => {
+                    write!(f, "()")
+                }
+                p => {
+                    write!(f, "({} {})", p.car, p.cdr)
+                }
+            },
         }
     }
 }
 
 // ctx ===
 
+#[derive(Debug)]
 struct Context {
     symbol_table: Vec<Rc<String>>,
+    builtins: Vec<Builtin>,
     ast: Value,
 }
 
 impl Context {
+    fn add_builtin(
+        self: &mut Context,
+        name: &str,
+        ty: BuiltinType,
+        func: fn(&Value, &mut Self) -> Value,
+    ) {
+        let name_rc = self.get_symbol(name);
+        self.builtins.push(Builtin {
+            name: name_rc,
+            ty,
+            func,
+        });
+    }
+
+    fn get_builtin(self: &Context, name: &str) -> Option<Builtin> {
+        self.builtins
+            .iter()
+            .find(|b| b.name.as_str() == name)
+            .cloned()
+    }
+
     fn get_symbol(self: &mut Context, name: &str) -> Rc<String> {
         let maybe_rc = self.symbol_table.iter().find(|s| s.as_str() == name);
 
         match maybe_rc {
-            Some(rc) => rc.clone(),
+            Some(rc) => Rc::clone(rc),
             None => {
                 let rc = Rc::new(String::from(name));
-                self.symbol_table.push(rc.clone());
-                rc.clone()
+                self.symbol_table.push(Rc::clone(&rc));
+                Rc::clone(&rc)
             }
         }
     }
 
     fn parse(self: &mut Context, t: &mut Tokenizer<'_>) {
-        let append_value = |stk: &mut Vec<Value>, v: &Value| {
+        let append_value = |stk: &mut Vec<Value>, v: Value| {
+            let Value::Pair(ptr) = stk.last().unwrap() else {
+                panic!();
+            };
+
             let pair = Value::new_pair();
 
-            {
-                let top = stk.last().unwrap();
-                let Value::Pair(ptr) = top else {
-                    panic!();
-                };
+            _ = ptr.replace(Pair {
+                car: v,
+                cdr: pair.clone(),
+            });
 
-                let mut ptr_mut = ptr.contents.as_ref().unwrap().borrow_mut();
-
-                ptr_mut.car = v.clone();
-                ptr_mut.cdr = pair.clone();
-            }
-
-            let at = stk.len() - 1;
-            stk[at] = pair.clone();
+            *stk.last_mut().unwrap() = pair;
         };
 
         let root = Value::new_pair();
@@ -186,33 +251,53 @@ impl Context {
         let mut ast_stack: Vec<Value> = Vec::new();
         ast_stack.push(root.clone());
 
-        let mut token = t.next_token();
-        while token != None {
-            match token.unwrap() {
+        while let Some(token) = t.next_token() {
+            match token {
                 "(" => {
                     let new_list = Value::new_pair();
-                    append_value(&mut ast_stack, &new_list);
-                    ast_stack.push(new_list.clone());
+                    append_value(&mut ast_stack, new_list.clone());
+                    ast_stack.push(new_list);
                 }
                 // TODO
                 //  check ast_stack len, shouldnt be < 1
                 ")" => _ = ast_stack.pop(),
-                s => match s.parse::<isize>() {
-                    Ok(i) => {
-                        append_value(&mut ast_stack, &Value::new_integer(i));
-                    }
-                    _ => {
+                s => {
+                    if let Ok(i) = s.parse::<isize>() {
+                        append_value(&mut ast_stack, Value::new_integer(i));
+                    } else {
                         let symbol = self.get_symbol(s);
-                        append_value(&mut ast_stack, &Value::new_symbol(symbol));
+                        append_value(&mut ast_stack, Value::new_symbol(symbol.clone()));
                     }
-                },
+                }
             }
-            token = t.next_token();
         }
 
         // TODO
         //  check ast_stack len, should be 1
         self.ast = root;
+    }
+
+    fn process_special_forms(&mut self) {
+        let mut iter = ValueIter::from(self.ast.clone());
+        while let Some(Value::Pair(p0)) = &iter.next() {
+            let mut new_car = None;
+
+            if let v @ Value::Pair(p1) = &p0.borrow().car {
+                if let Value::Symbol(s) = &p1.borrow().car {
+                    if let Some(b) = self.get_builtin(s.as_str()) {
+                        new_car = Some((b.func)(v, self));
+                    }
+                }
+            }
+
+            if let Some(new_car) = new_car {
+                let new_cdr = p0.borrow().cdr.clone();
+                p0.replace(Pair {
+                    car: new_car,
+                    cdr: new_cdr,
+                });
+            }
+        }
     }
 }
 
@@ -221,11 +306,38 @@ impl Context {
 fn main() {
     let mut ctx = Context {
         symbol_table: Vec::new(),
+        builtins: Vec::new(),
         ast: Value::Nil,
     };
 
+    ctx.add_builtin("lambda", BuiltinType::SpecialForm, |v, _| {
+        let mut bindings = None;
+        let mut body = None;
+        println!("{v}");
+
+        if let Value::Pair(p0) = v {
+            if let Value::Pair(p1) = &p0.borrow().cdr {
+                if let v2 @ Value::Pair(_) = &p1.borrow().car {
+                    bindings = Some(v2.clone());
+                }
+                if let v2 @ Value::Pair(_) = &p1.borrow().cdr {
+                    body = Some(v2.clone());
+                }
+            }
+        }
+
+        Value::Lambda(Rc::new(RefCell::new(Lambda {
+            bindings: bindings.unwrap(),
+            body: body.unwrap(),
+        })))
+    });
+    ctx.add_builtin("+", BuiltinType::Normal, |_, _| Value::Nil);
+
     // let mut t = Tokenizer::new("(+ (* 3) (* 6))");
-    let mut t = Tokenizer::new("(lambda (a b) (+ a b))");
+    let mut t = Tokenizer::new("(lambda (a b) (+ a b)) (= 2 3)");
     ctx.parse(&mut t);
-    println!("{}", ctx.ast);
+    println!("{:?}\n{}", ctx.symbol_table, ctx.ast);
+
+    ctx.process_special_forms();
+    println!("{:?}\n{}", ctx.symbol_table, ctx.ast);
 }
