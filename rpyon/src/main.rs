@@ -1,4 +1,4 @@
-use std::cell::{Ref, RefCell};
+use std::cell::{Ref, RefCell, RefMut};
 use std::fmt;
 use std::rc::Rc;
 
@@ -118,6 +118,30 @@ impl Value {
         Value::Pair(ptr)
     }
 
+    fn car(&self) -> Option<Ref<Value>> {
+        if let Value::Pair(p0) = self {
+            Some(Ref::map(p0.borrow(), |p| &p.car))
+        } else {
+            None
+        }
+    }
+
+    fn car_mut(&self) -> Option<RefMut<Value>> {
+        if let Value::Pair(p0) = self {
+            Some(RefMut::map(p0.borrow_mut(), |p| &mut p.car))
+        } else {
+            None
+        }
+    }
+
+    fn cdr(&self) -> Option<Ref<Value>> {
+        if let Value::Pair(p0) = self {
+            Some(Ref::map(p0.borrow(), |p| &p.cdr))
+        } else {
+            None
+        }
+    }
+
     fn new_symbol(s: Rc<String>) -> Value {
         Value::Symbol(s)
     }
@@ -141,21 +165,22 @@ impl ValueIter {
     }
 
     fn next(&mut self) -> Option<Value> {
-        let mut ret = None;
-        let mut next = None;
-
-        if let Some(Value::Pair(pair)) = &self.current {
-            if let Pair {
-                cdr: cdr @ Value::Pair(_),
-                ..
-            } = &*pair.borrow()
-            {
-                ret = self.current.clone();
-                next = Some(cdr.clone());
-            }
-        };
-
-        self.current = next;
+        let ret = self.current.clone();
+        self.current = self
+            .current
+            .as_ref()
+            .and_then(Value::cdr)
+            .filter(|v| match v.cdr() {
+                None => false,
+                Some(v) => {
+                    if let Value::Nil = *v {
+                        false
+                    } else {
+                        true
+                    }
+                }
+            })
+            .map(|v| (*v).clone());
         ret
     }
 }
@@ -164,12 +189,12 @@ impl fmt::Display for Value {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
         match self {
             Value::Nil => write!(f, "nil"),
-            Value::Integer(i) => write!(f, "i:{i}"),
-            Value::Symbol(s) => write!(f, "s:{s}"),
-            Value::Builtin(b) => write!(f, "b:{}", b.name),
+            Value::Integer(i) => write!(f, "i.{i}"),
+            Value::Symbol(s) => write!(f, "{s}"),
+            Value::Builtin(b) => write!(f, "{}", b.name),
             Value::Lambda(l) => {
                 let l = l.borrow();
-                write!(f, "l:(<{}> {})", l.bindings, l.body)
+                write!(f, "l.({} [{}])", l.bindings, l.body)
             }
             Value::Pair(p) => match &*p.borrow() {
                 Pair {
@@ -179,7 +204,16 @@ impl fmt::Display for Value {
                     write!(f, "()")
                 }
                 p => {
+                    /*
                     write!(f, "({} {})", p.car, p.cdr)
+                    */
+                    let mut iter = ValueIter::from(self.clone());
+
+                    write!(f, "( ");
+                    while let Some(v) = iter.next() {
+                        write!(f, "{} ", v.car().unwrap());
+                    }
+                    write!(f, ")")
                 }
             },
         }
@@ -279,23 +313,23 @@ impl Context {
 
     fn process_special_forms(&mut self) {
         let mut iter = ValueIter::from(self.ast.clone());
-        while let Some(Value::Pair(p0)) = &iter.next() {
-            let mut new_car = None;
+        while let Some(v) = &iter.next() {
+            let new_car = {
+                let expr = v.car().unwrap();
 
-            if let v @ Value::Pair(p1) = &p0.borrow().car {
-                if let Value::Symbol(s) = &p1.borrow().car {
-                    if let Some(b) = self.get_builtin(s.as_str()) {
-                        new_car = Some((b.func)(v, self));
+                let builtin = expr.car().and_then(|v| {
+                    if let Value::Symbol(s) = &*v {
+                        self.get_builtin(s.as_str())
+                    } else {
+                        None
                     }
-                }
-            }
+                });
+
+                builtin.map(|b| (b.func)(&expr, self))
+            };
 
             if let Some(new_car) = new_car {
-                let new_cdr = p0.borrow().cdr.clone();
-                p0.replace(Pair {
-                    car: new_car,
-                    cdr: new_cdr,
-                });
+                *v.car_mut().unwrap() = new_car;
             }
         }
     }
@@ -311,33 +345,18 @@ fn main() {
     };
 
     ctx.add_builtin("lambda", BuiltinType::SpecialForm, |v, _| {
-        let mut bindings = None;
-        let mut body = None;
-        println!("{v}");
-
-        if let Value::Pair(p0) = v {
-            if let Value::Pair(p1) = &p0.borrow().cdr {
-                if let v2 @ Value::Pair(_) = &p1.borrow().car {
-                    bindings = Some(v2.clone());
-                }
-                if let v2 @ Value::Pair(_) = &p1.borrow().cdr {
-                    body = Some(v2.clone());
-                }
-            }
-        }
-
-        Value::Lambda(Rc::new(RefCell::new(Lambda {
-            bindings: bindings.unwrap(),
-            body: body.unwrap(),
-        })))
+        let bindings = v.cdr().as_ref().and_then(|v| v.car()).unwrap().clone();
+        let body = v.cdr().as_ref().and_then(|v| v.cdr()).unwrap().clone();
+        Value::Lambda(Rc::new(RefCell::new(Lambda { bindings, body })))
     });
     ctx.add_builtin("+", BuiltinType::Normal, |_, _| Value::Nil);
 
-    // let mut t = Tokenizer::new("(+ (* 3) (* 6))");
-    let mut t = Tokenizer::new("(lambda (a b) (+ a b)) (= 2 3)");
+    let input = "(lambda (a b) (+ a b)) (= 2 3)";
+
+    let mut t = Tokenizer::new(input);
     ctx.parse(&mut t);
-    println!("{:?}\n{}", ctx.symbol_table, ctx.ast);
+    println!("{}", ctx.ast);
 
     ctx.process_special_forms();
-    println!("{:?}\n{}", ctx.symbol_table, ctx.ast);
+    println!("{}", ctx.ast);
 }
