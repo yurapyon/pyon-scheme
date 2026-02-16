@@ -27,7 +27,7 @@ pub enum BuiltinType {
 pub struct Builtin {
     pub name: Rc<String>,
     pub ty: BuiltinType,
-    pub func: fn(expr: &Value, context: &mut Context) -> Value,
+    pub func: fn(args: &Value, context: &mut Context, environment: &Value) -> Value,
 }
 
 #[derive(Debug, Clone)]
@@ -44,13 +44,12 @@ impl Value {
     // pairs ===
 
     pub fn new_pair() -> Value {
-        let pair = Pair {
-            car: Value::Nil,
-            cdr: Value::Nil,
-        };
+        Self::new_pair_car_cdr(Value::Nil, Value::Nil)
+    }
 
+    pub fn new_pair_car_cdr(car: Value, cdr: Value) -> Value {
+        let pair = Pair { car, cdr };
         let ptr = Rc::new(RefCell::new(pair));
-
         Value::Pair(ptr)
     }
 
@@ -94,6 +93,14 @@ impl Value {
         }
     }
 
+    pub fn borrow_mut_cdr(&self) -> Option<RefMut<'_, Value>> {
+        if let Value::Pair(p0) = self {
+            Some(RefMut::map(p0.borrow_mut(), |p| &mut p.cdr))
+        } else {
+            None
+        }
+    }
+
     // other stuff ===
 
     pub fn new_symbol(s: Rc<String>) -> Value {
@@ -131,17 +138,30 @@ impl fmt::Display for Value {
                 } => {
                     write!(f, "()")
                 }
-                _ => {
-                    /*
-                    write!(f, "({} {})", p.car, p.cdr)
-                    */
-                    let iter = ValueListIter::from(self.clone());
+                p => {
+                    if matches!(p.cdr, Value::Pair(_)) {
+                        let iter = ValueListIter::from(self.clone());
+                        _ = write!(f, "(");
+                        for value in iter {
+                            _ = write!(f, "{}", value.borrow_car().unwrap());
 
-                    _ = write!(f, "( ");
-                    for value in iter {
-                        _ = write!(f, "{} ", value.borrow_car().unwrap());
+                            match &*value.borrow_cdr().unwrap() {
+                                v @ Value::Pair(_) => {
+                                    if matches!(&*v.borrow_cdr().unwrap(), Value::Nil) {
+                                        Ok(())
+                                    } else {
+                                        write!(f, " ")
+                                    };
+                                }
+                                _ => (),
+                                // TODO handle dotted
+                                // Value::Pair(_) => write!(f," "),
+                            }
+                        }
+                        write!(f, ")")
+                    } else {
+                        write!(f, "({} . {})", p.car, p.cdr)
                     }
-                    write!(f, ")")
                 }
             },
         }
@@ -163,12 +183,17 @@ impl ValueListIter {
 impl Iterator for ValueListIter {
     type Item = Value;
     fn next(&mut self) -> Option<Self::Item> {
+        // TODO
+        // iterating on () should return none right off the bat
         let ret = self.current.clone();
         self.current = self
             .current
             .as_ref()
             .and_then(|v| v.borrow_cdr())
-            .filter(|v| v.borrow_cdr().is_some_and(|v| !matches!(*v, Value::Nil)))
+            .filter(|v| {
+                v.borrow_car().is_some_and(|v| !matches!(*v, Value::Nil))
+                    && v.borrow_cdr().is_some_and(|v| !matches!(*v, Value::Nil))
+            })
             .map(|v| (*v).clone());
         ret
     }

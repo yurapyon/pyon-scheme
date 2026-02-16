@@ -13,18 +13,25 @@ mod value;
 fn main() {
     let mut ctx = Context::new();
 
-    ctx.add_builtin("lambda", BuiltinType::SpecialForm, |v, _| {
+    ctx.add_builtin("lambda", BuiltinType::SpecialForm, |v, _, _| {
         let bindings = v.cdr().and_then(|v| v.car()).unwrap();
         let body = v.cdr().and_then(|v| v.cdr()).unwrap();
         Value::new_lambda(Lambda { bindings, body })
     });
-    ctx.add_builtin("+", BuiltinType::Normal, |args, ctx| {
+    ctx.add_builtin("+", BuiltinType::Normal, |args, ctx, env| {
         let iter = ValueListIter::from(args.clone());
         let mut ct = 0;
         for v in iter {
-            let from_env = ctx.eval(v.car().unwrap());
+            /*
+            let from_env = ctx.eval(&v.car().unwrap(), env);
             match from_env {
                 Value::Integer(i) => ct += i,
+                // TODO handle error
+                _ => (),
+            }
+            */
+            match v.car() {
+                Some(Value::Integer(i)) => ct += i,
                 // TODO handle error
                 _ => (),
             }
@@ -33,11 +40,11 @@ fn main() {
     });
 
     // let input = "((lambda (a b) (+ a b )) (lambda (c d) (+ c d)) 150) 1 2 3";
-    let input = "(+ 1 2)";
+    // let input = "(+ 1 2)";
+    let input = "((lambda () (+ 1 2)))";
 
     let mut t = Tokenizer::new(input);
     ctx.parse(&mut t);
-    println!("{}", ctx.ast);
 
     /*
     let i = ValueTreeIter::from(ctx.ast.clone());
@@ -47,8 +54,10 @@ fn main() {
     */
 
     ctx.process_special_forms();
-    println!("{}", ctx.ast);
+    println!("ast:\n{}\nenv:\n{}", ctx.ast, ctx.global_environment);
 
-    let v = ctx.eval(ctx.ast.car().unwrap());
-    println!("{}", v);
+    let env = ctx.global_environment.clone();
+
+    let v = ctx.eval(&ctx.ast.car().unwrap(), &env);
+    println!("result: {}", v);
 }
