@@ -41,6 +41,8 @@ pub enum Value {
 }
 
 impl Value {
+    // pairs ===
+
     pub fn new_pair() -> Value {
         let pair = Pair {
             car: Value::Nil,
@@ -92,6 +94,8 @@ impl Value {
         }
     }
 
+    // other stuff ===
+
     pub fn new_symbol(s: Rc<String>) -> Value {
         Value::Symbol(s)
     }
@@ -131,7 +135,7 @@ impl fmt::Display for Value {
                     /*
                     write!(f, "({} {})", p.car, p.cdr)
                     */
-                    let iter = ValueIter::from(self.clone());
+                    let iter = ValueListIter::from(self.clone());
 
                     _ = write!(f, "( ");
                     for value in iter {
@@ -146,25 +150,72 @@ impl fmt::Display for Value {
 
 // ===
 
-pub struct ValueIter {
+pub struct ValueListIter {
     current: Option<Value>,
 }
 
-impl ValueIter {
+impl ValueListIter {
     pub fn from(v: Value) -> Self {
         Self { current: Some(v) }
     }
 }
 
-impl Iterator for ValueIter {
+impl Iterator for ValueListIter {
     type Item = Value;
     fn next(&mut self) -> Option<Self::Item> {
         let ret = self.current.clone();
         self.current = self
             .current
             .as_ref()
-            .and_then(|v| v.cdr())
-            .filter(|v| v.borrow_cdr().is_some_and(|v| !matches!(*v, Value::Nil)));
+            .and_then(|v| v.borrow_cdr())
+            .filter(|v| v.borrow_cdr().is_some_and(|v| !matches!(*v, Value::Nil)))
+            .map(|v| (*v).clone());
+        ret
+    }
+}
+
+// ===
+
+pub struct ValueTreeIter {
+    iterators: Vec<ValueListIter>,
+}
+
+impl ValueTreeIter {
+    pub fn from(v: Value) -> Self {
+        let iterators = vec![ValueListIter::from(v)];
+        Self { iterators }
+    }
+}
+
+impl Iterator for ValueTreeIter {
+    type Item = Value;
+    fn next(&mut self) -> Option<Self::Item> {
+        let mut ret = self.iterators.last_mut().and_then(|i| i.next());
+
+        while matches!(ret, None) {
+            let i = self.iterators.pop();
+            if matches!(i, None) {
+                break;
+            }
+
+            ret = self.iterators.last_mut().and_then(|i| i.next());
+        }
+
+        if matches!(ret, None) {
+            return None;
+        }
+
+        match ret.as_ref().unwrap().car() {
+            Some(v @ Value::Pair(_)) => {
+                // TODO
+                // If something like this: (a b (c d)) is encountered
+                // ( ( c d ) ) will be returned at some point
+                // unsure if this value should be skipped
+                self.iterators.push(ValueListIter::from(v.clone()));
+            }
+            _ => (),
+        }
+
         ret
     }
 }

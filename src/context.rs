@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use crate::tokenizer::Tokenizer;
-use crate::value::{Builtin, BuiltinType, Pair, Value, ValueIter};
+use crate::value::{Builtin, BuiltinType, Pair, Value, ValueTreeIter};
 
 #[derive(Debug)]
 pub struct Context {
@@ -47,18 +47,18 @@ impl Context {
 
     pub fn parse(self: &mut Context, t: &mut Tokenizer<'_>) {
         let append_value = |stk: &mut Vec<Value>, v: Value| {
-            let Value::Pair(ptr) = stk.last().unwrap() else {
+            let Some(Value::Pair(pair)) = stk.last() else {
                 panic!();
             };
 
-            let pair = Value::new_pair();
+            let new_pair = Value::new_pair();
 
-            _ = ptr.replace(Pair {
+            _ = pair.replace(Pair {
                 car: v,
-                cdr: pair.clone(),
+                cdr: new_pair.clone(),
             });
 
-            *stk.last_mut().unwrap() = pair;
+            *stk.last_mut().unwrap() = new_pair;
         };
 
         let root = Value::new_pair();
@@ -93,7 +93,7 @@ impl Context {
     }
 
     pub fn process_special_forms(&mut self) {
-        let iter = ValueIter::from(self.ast.clone());
+        let iter = ValueTreeIter::from(self.ast.clone());
         for value in iter {
             let new_car = {
                 let expr = value.borrow_car().unwrap();

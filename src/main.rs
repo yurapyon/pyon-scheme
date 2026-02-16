@@ -2,7 +2,7 @@
 
 use crate::context::Context;
 use crate::tokenizer::Tokenizer;
-use crate::value::{BuiltinType, Lambda, Value};
+use crate::value::{BuiltinType, Lambda, Value, ValueTreeIter};
 
 mod context;
 mod tokenizer;
@@ -24,11 +24,18 @@ fn main() {
     });
     ctx.add_builtin("+", BuiltinType::Normal, |_, _| Value::Nil);
 
-    let input = "(lambda xyz (lambda abc (xyz abc))) (+ 2 3)";
+    let input = "((lambda (a b) (+ a b )) (lambda (c d) (+ c d)) 150) 1 2 3";
 
     let mut t = Tokenizer::new(input);
     ctx.parse(&mut t);
     println!("{}", ctx.ast);
+
+    /*
+    let i = ValueTreeIter::from(ctx.ast.clone());
+    for value in i {
+        println!(">> {}\n", value);
+    }
+    */
 
     ctx.process_special_forms();
     println!("{}", ctx.ast);
