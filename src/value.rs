@@ -119,7 +119,7 @@ impl fmt::Display for Value {
             Value::Nil => write!(f, "nil"),
             Value::Integer(i) => write!(f, "i.{i}"),
             Value::Symbol(s) => write!(f, "{s}"),
-            Value::Builtin(b) => write!(f, "{}", b.name),
+            Value::Builtin(b) => write!(f, "[{}]", b.name),
             Value::Lambda(l) => {
                 let l = l.borrow();
                 write!(f, "\\{}:{}", l.bindings, l.body)

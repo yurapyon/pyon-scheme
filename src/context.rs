@@ -5,14 +5,24 @@ use crate::value::{Builtin, BuiltinType, Pair, Value, ValueTreeIter};
 
 #[derive(Debug)]
 pub struct Context {
+    pub env: Value,
     pub symbol_table: Vec<Rc<String>>,
     pub builtins: Vec<Builtin>,
     pub ast: Value,
 }
 
 impl Context {
+    pub fn new() -> Self {
+        Self {
+            env: Value::new_pair(),
+            symbol_table: Vec::new(),
+            builtins: Vec::new(),
+            ast: Value::Nil,
+        }
+    }
+
     pub fn add_builtin(
-        self: &mut Context,
+        &mut self,
         name: &str,
         ty: BuiltinType,
         func: fn(&Value, &mut Self) -> Value,
@@ -25,14 +35,14 @@ impl Context {
         });
     }
 
-    fn get_builtin(self: &Context, name: &str) -> Option<Builtin> {
+    fn get_builtin(&self, name: &str) -> Option<Builtin> {
         self.builtins
             .iter()
             .find(|b| b.name.as_str() == name)
             .cloned()
     }
 
-    fn get_symbol(self: &mut Context, name: &str) -> Rc<String> {
+    fn get_symbol(&mut self, name: &str) -> Rc<String> {
         let maybe_rc = self.symbol_table.iter().find(|s| s.as_str() == name);
 
         match maybe_rc {
@@ -113,6 +123,34 @@ impl Context {
             if let Some(new_car) = new_car {
                 *value.borrow_mut_car().unwrap() = new_car;
             }
+        }
+    }
+
+    pub fn eval(&mut self, value: Value) -> Value {
+        // TODO
+        match value {
+            v @ Value::Pair(_) => {
+                let func = v.car().unwrap();
+                let args = v.cdr().unwrap();
+
+                let from_env = self.eval(func);
+
+                match from_env {
+                    Value::Builtin(b) => (b.func)(&args, self),
+                    // TODO
+                    Value::Lambda(l) => Value::Nil,
+                    _ => {
+                        // Error
+                        Value::Nil
+                    }
+                }
+            }
+            v @ Value::Symbol(_) => {
+                // TODO
+                // Look up in env
+                Value::Builtin(self.builtins.last().unwrap().clone())
+            }
+            _ => value,
         }
     }
 }

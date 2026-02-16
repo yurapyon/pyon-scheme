@@ -2,7 +2,7 @@
 
 use crate::context::Context;
 use crate::tokenizer::Tokenizer;
-use crate::value::{BuiltinType, Lambda, Value, ValueTreeIter};
+use crate::value::{BuiltinType, Lambda, Value, ValueListIter, ValueTreeIter};
 
 mod context;
 mod tokenizer;
@@ -11,20 +11,29 @@ mod value;
 // ===
 
 fn main() {
-    let mut ctx = Context {
-        symbol_table: Vec::new(),
-        builtins: Vec::new(),
-        ast: Value::Nil,
-    };
+    let mut ctx = Context::new();
 
     ctx.add_builtin("lambda", BuiltinType::SpecialForm, |v, _| {
         let bindings = v.cdr().and_then(|v| v.car()).unwrap();
         let body = v.cdr().and_then(|v| v.cdr()).unwrap();
         Value::new_lambda(Lambda { bindings, body })
     });
-    ctx.add_builtin("+", BuiltinType::Normal, |_, _| Value::Nil);
+    ctx.add_builtin("+", BuiltinType::Normal, |args, ctx| {
+        let iter = ValueListIter::from(args.clone());
+        let mut ct = 0;
+        for v in iter {
+            let from_env = ctx.eval(v.car().unwrap());
+            match from_env {
+                Value::Integer(i) => ct += i,
+                // TODO handle error
+                _ => (),
+            }
+        }
+        Value::new_integer(ct)
+    });
 
-    let input = "((lambda (a b) (+ a b )) (lambda (c d) (+ c d)) 150) 1 2 3";
+    // let input = "((lambda (a b) (+ a b )) (lambda (c d) (+ c d)) 150) 1 2 3";
+    let input = "(+ 1 2)";
 
     let mut t = Tokenizer::new(input);
     ctx.parse(&mut t);
@@ -39,4 +48,7 @@ fn main() {
 
     ctx.process_special_forms();
     println!("{}", ctx.ast);
+
+    let v = ctx.eval(ctx.ast.car().unwrap());
+    println!("{}", v);
 }
