@@ -53,25 +53,64 @@ impl Value {
         Value::Pair(ptr)
     }
 
-    pub fn car(&self) -> Option<Value> {
+    pub fn is_empty_list(&self) -> bool {
+        self.try_car().is_some_and(|car| matches!(car, Value::Nil))
+            && self.try_cdr().is_some_and(|cdr| matches!(cdr, Value::Nil))
+    }
+
+    pub fn car(&self) -> Value {
         if let Value::Pair(p0) = self {
-            Some(p0.borrow().car.clone())
+            p0.borrow().car.clone()
+        } else {
+            // TODO error msg
+            panic!();
+        }
+    }
+
+    pub fn cdr(&self) -> Value {
+        if let Value::Pair(p0) = self {
+            p0.borrow().cdr.clone()
+        } else {
+            // TODO error msg
+            panic!();
+        }
+    }
+
+    // TODO these could be results?
+    pub fn try_car(&self) -> Option<Value> {
+        if matches!(self, Value::Pair(_)) {
+            Some(self.car())
         } else {
             None
         }
     }
 
-    pub fn cdr(&self) -> Option<Value> {
-        if let Value::Pair(p0) = self {
-            Some(p0.borrow().cdr.clone())
+    pub fn try_cdr(&self) -> Option<Value> {
+        if matches!(self, Value::Pair(_)) {
+            Some(self.cdr())
         } else {
             None
         }
     }
 
-    pub fn borrow_car(&self) -> Option<Ref<'_, Value>> {
+    pub fn borrow_car(&self) -> Ref<'_, Value> {
+        let Value::Pair(p0) = self else { panic!() };
+        Ref::map(p0.borrow(), |p| &p.car)
+    }
+    /*
+
+    pub fn borrow_cdr(&self) -> Option<Ref<'_, Value>> {
         if let Value::Pair(p0) = self {
-            Some(Ref::map(p0.borrow(), |p| &p.car))
+            Some(Ref::map(p0.borrow(), |p| &p.cdr))
+        } else {
+            None
+        }
+    }
+    */
+
+    pub fn try_borrow_car(&self) -> Option<Ref<'_, Value>> {
+        if matches!(self, Value::Pair(_)) {
+            Some(self.borrow_car())
         } else {
             None
         }
@@ -85,14 +124,6 @@ impl Value {
         }
     }
 
-    pub fn borrow_cdr(&self) -> Option<Ref<'_, Value>> {
-        if let Value::Pair(p0) = self {
-            Some(Ref::map(p0.borrow(), |p| &p.cdr))
-        } else {
-            None
-        }
-    }
-
     pub fn borrow_mut_cdr(&self) -> Option<RefMut<'_, Value>> {
         if let Value::Pair(p0) = self {
             Some(RefMut::map(p0.borrow_mut(), |p| &mut p.cdr))
@@ -101,11 +132,36 @@ impl Value {
         }
     }
 
-    // other stuff ===
+    // TODO this could compare rcs directly
+    pub fn assoc(&self, name: &str) -> Option<Value> {
+        let mut iter = ValueListIter::from(self.clone());
+        let from_alist = iter.find(|value| {
+            if let Value::Symbol(sym) = value.car().car() {
+                name == sym.as_str()
+            } else {
+                panic!();
+            }
+        });
+
+        from_alist.map(|v| v.car().cdr())
+    }
+
+    // symbols ===
 
     pub fn new_symbol(s: Rc<String>) -> Value {
         Value::Symbol(s)
     }
+
+    pub fn is_symbol(&self) -> bool {
+        matches!(self, Value::Symbol(_))
+    }
+
+    pub fn as_symbol(&self) -> &Rc<String> {
+        let Value::Symbol(s) = self else { panic!() };
+        s
+    }
+
+    // ===
 
     pub fn new_integer(i: isize) -> Value {
         Value::Integer(i)
@@ -143,11 +199,11 @@ impl fmt::Display for Value {
                         let iter = ValueListIter::from(self.clone());
                         _ = write!(f, "(");
                         for value in iter {
-                            _ = write!(f, "{}", value.borrow_car().unwrap());
+                            _ = write!(f, "{}", value.car());
 
-                            match &*value.borrow_cdr().unwrap() {
+                            match value.cdr() {
                                 v @ Value::Pair(_) => {
-                                    if matches!(&*v.borrow_cdr().unwrap(), Value::Nil) {
+                                    if matches!(v.cdr(), Value::Nil) {
                                         Ok(())
                                     } else {
                                         write!(f, " ")
@@ -182,19 +238,18 @@ impl ValueListIter {
 
 impl Iterator for ValueListIter {
     type Item = Value;
+
     fn next(&mut self) -> Option<Self::Item> {
         // TODO
         // iterating on () should return none right off the bat
         let ret = self.current.clone();
+
         self.current = self
             .current
             .as_ref()
-            .and_then(|v| v.borrow_cdr())
-            .filter(|v| {
-                v.borrow_car().is_some_and(|v| !matches!(*v, Value::Nil))
-                    && v.borrow_cdr().is_some_and(|v| !matches!(*v, Value::Nil))
-            })
-            .map(|v| (*v).clone());
+            .and_then(|v| v.try_cdr())
+            .filter(|v| matches!(v, Value::Pair(_)) && !v.is_empty_list());
+
         ret
     }
 }
@@ -230,7 +285,7 @@ impl Iterator for ValueTreeIter {
             return None;
         }
 
-        match ret.as_ref().unwrap().car() {
+        match ret.as_ref().map(|v| v.car()) {
             Some(v @ Value::Pair(_)) => {
                 // TODO
                 // If something like this: (a b (c d)) is encountered

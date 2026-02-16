@@ -14,8 +14,8 @@ fn main() {
     let mut ctx = Context::new();
 
     ctx.add_builtin("lambda", BuiltinType::SpecialForm, |v, _, _| {
-        let bindings = v.cdr().and_then(|v| v.car()).unwrap();
-        let body = v.cdr().and_then(|v| v.cdr()).unwrap();
+        let bindings = v.cdr().car();
+        let body = v.cdr().cdr();
         Value::new_lambda(Lambda { bindings, body })
     });
     ctx.add_builtin("+", BuiltinType::Normal, |args, ctx, env| {
@@ -31,7 +31,7 @@ fn main() {
             }
             */
             match v.car() {
-                Some(Value::Integer(i)) => ct += i,
+                Value::Integer(i) => ct += i,
                 // TODO handle error
                 _ => (),
             }
@@ -58,6 +58,6 @@ fn main() {
 
     let env = ctx.global_environment.clone();
 
-    let v = ctx.eval(&ctx.ast.car().unwrap(), &env);
+    let v = ctx.eval(&ctx.ast.car(), &env);
     println!("result: {}", v);
 }

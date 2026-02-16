@@ -1,3 +1,4 @@
+use std::cell::Ref;
 use std::rc::Rc;
 
 use crate::tokenizer::Tokenizer;
@@ -109,75 +110,58 @@ impl Context {
         self.ast = root;
     }
 
-    fn find_in_global_environment(&self, name: &str) -> Option<Value> {
-        let mut iter = ValueListIter::from(self.global_environment.clone());
-
-        let from_env = iter.find(|v| {
-            let car = v.borrow_car().unwrap();
-            let caar = car.borrow_car().unwrap();
-            if let Value::Symbol(s) = &*caar {
-                s.as_str() == name
-            } else {
-                false
-            }
-        });
-
-        from_env.and_then(|v| v.car().and_then(|v| v.cdr()))
-    }
-
     pub fn process_special_forms(&mut self) {
         let iter = ValueTreeIter::from(self.ast.clone());
         for value in iter {
-            let new_car = {
-                let expr = value.borrow_car().unwrap();
-
-                let builtin = expr.borrow_car().and_then(|v| {
-                    if let Value::Symbol(s) = &*v {
-                        self.find_in_global_environment(s.as_str()).and_then(|v| {
-                            if let Value::Builtin(
-                                b @ Builtin {
-                                    ty: BuiltinType::SpecialForm,
-                                    ..
-                                },
-                            ) = v
-                            {
-                                Some(b)
-                            } else {
-                                None
-                            }
-                        })
-                    } else {
-                        None
-                    }
-                });
-
-                builtin.map(|b| (b.func)(&expr, self, &Value::Nil))
+            let Value::Pair(pair) = value else {
+                panic!();
             };
 
-            if let Some(new_car) = new_car {
-                *value.borrow_mut_car().unwrap() = new_car;
+            let new_value = {
+                let expr = &pair.borrow().car;
+
+                expr.try_borrow_car()
+                    .filter(|v| Value::is_symbol(v))
+                    .map(|v| Ref::map(v, Value::as_symbol))
+                    .and_then(|s| self.global_environment.assoc(s.as_str()))
+                    .and_then(|v| {
+                        if let Value::Builtin(
+                            b @ Builtin {
+                                ty: BuiltinType::SpecialForm,
+                                ..
+                            },
+                        ) = v
+                        {
+                            Some(b)
+                        } else {
+                            None
+                        }
+                    })
+                    .map(|b| (b.func)(expr, self, &Value::Nil))
+            };
+
+            if let Some(new_value) = new_value {
+                pair.borrow_mut().car = new_value;
             }
         }
     }
 
     pub fn eval(&mut self, value: &Value, environment: &Value) -> Value {
-        // TODO
-        match &value {
-            v @ Value::Pair(_) => {
-                let func = v.car().unwrap();
-                let args = v.cdr().unwrap();
+        match value {
+            Value::Pair(p) => {
+                let func = &p.borrow().car;
+                let args = &p.borrow().cdr;
 
-                let from_env = self.eval(&func, environment);
+                let from_env = self.eval(func, environment);
 
                 match from_env {
-                    Value::Builtin(b) => (b.func)(&args, self, environment),
-                    // TODO
+                    Value::Builtin(b) => (b.func)(args, self, environment),
                     Value::Lambda(l) => {
                         // TODO
                         // bind bindings to env
-                        // evaluate body
-                        let v = self.eval(&l.borrow().body.car().unwrap(), environment);
-                        v
+                        // TODO
+                        // body should eval all values in order
+                        self.eval(&l.borrow().body.car(), environment)
                     }
                     _ => {
                         // Error
@@ -186,20 +170,8 @@ impl Context {
                 }
             }
             Value::Symbol(s) => {
-                let mut iter = ValueListIter::from(environment.clone());
-                let pair = iter.find(|v| {
-                    if let Some(Value::Symbol(sym)) = v.car().and_then(|v| v.car()) {
-                        *s == sym
-                    } else {
-                        // TODO
-                        // panic!()
-                        false
-                    }
-                });
-                // TODO check exists in env
-                let value = pair.and_then(|v| v.car()).and_then(|v| v.cdr()).unwrap();
-                value
-                // Value::Builtin(self.builtins.last().unwrap().clone())
+                // TODO error if not found
+                environment.assoc(s).unwrap()
             }
             _ => value.clone(),
         }
